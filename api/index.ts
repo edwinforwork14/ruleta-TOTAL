@@ -1,4 +1,5 @@
 import { createRequire } from "node:module";
+import cors from "cors";
 import express, { type Router } from "express";
 
 // Vercel compiles this file as ESM but does not bundle the backend sources.
@@ -8,6 +9,21 @@ const { router } = loadModule("../backend/dist/app.js") as { router: Router };
 
 const app = express();
 
+// CORS: en Vercel se configura con FRONTEND_ORIGIN (dominio del frontend en VPS).
+// Si no está definida, permite cualquier origen (útil en desarrollo/previsualizaciones).
+const frontendOrigin = process.env.FRONTEND_ORIGIN;
+const allowedOrigins = frontendOrigin
+	? frontendOrigin.split(",").map((o: string) => o.trim())
+	: "*";
+
+app.use(
+	cors({
+		origin: allowedOrigins,
+		credentials: true,
+		methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+		allowedHeaders: ["Content-Type", "Authorization", "X-Operator-Password"],
+	}),
+);
 app.use(express.json({ limit: "4mb" }));
 
 // Vercel rewrites /api/* to /api/index?__path=* so the function path stays

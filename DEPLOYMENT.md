@@ -1,206 +1,309 @@
-# DEPLOYMENT.md — Ruleta TOTAL (Ubuntu 24.04 + MariaDB + ServerAvatar Panel)
+# DEPLOYMENT.md — Ruleta TOTAL
 
-## 1. Requisitos y entorno del VPS
+## Arquitectura
 
-- **Ubuntu 24.04** con **ServerAvatar** (panel web, **sin SSH**)
-- **MariaDB** disponible en el VPS
-- Acceso al panel web de ServerAvatar para:
-  - Crear base de datos y usuario MariaDB
-  - Configurar dominio y SSL (certificado Let's Encrypt)
-  - Crear el sitio web/aplicación y configurar proxy inverso
-- **No hay acceso SSH**; todo se hace desde el panel de ServerAvatar
+```
+┌─────────────────────────────────┐        ┌──────────────────────────────┐
+│   VPS (OpenLiteSpeed)           │        │   Vercel (Serverless)        │
+│                                 │        │                              │
+│   /var/www/ruleta.dominio.com/  │        │   https://ruleta-total.vercel.app
+│   └── html/ (dist/)  ◄──── HTTP ──────►  │   └── /api/*                 │
+│       ├── index.html            │   CORS  │       ├── /configuracion     │
+│       ├── assets/*.js           │        │       ├── /spin              │
+│       ├── assets/*.css          │        │       ├── /auth/*            │
+│       └── ... estáticos         │        │       ├── /tickets/*         │
+│                                 │        │       └── /roulettes/*       │
+│   🟢 Frontend (React + Vite)    │        │   🟡 Backend (Express.js)    │
+│   (solo archivos estáticos)     │        │   🔵 Base de datos externa   │
+└─────────────────────────────────┘        └──────────────────────────────┘
+```
 
-## 2. Información previa que debe proporcionar el administrador
+- **Frontend**: React 19 + Vite 7 → build estático → servido por OpenLiteSpeed
+- **Backend**: Express.js en Vercel Functions (serverless)
+- **Base de datos**: Turso / PlanetScale / Neon / MariaDB expuesta (debe ser accesible desde Vercel)
 
-| Variable | Valor a proporcionar por el admin |
-|----------|----------------------------|
-| `MARIADB_HOST` | Ej. `127.0.0.1` o `localhost` |
-| `MARIADB_PORT` | Ej. `3306` |
-| `MARIADB_DATABASE` | Nombre de la base de datos MariaDB |
-| `MARIADB_USER` | Usuario MariaDB (con privilegios mínimos: SELECT, INSERT, UPDATE, DELETE) |
-| `MARIADB_PASSWORD` | Contraseña del usuario MariaDB |
-| `OPERATOR_PASSWORD` | Contraseña fuerte para panel de operador |
-| `TICKET_ENCRYPTION_KEY` | 32 bytes base64 (generar con `node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"`) |
-| `PUBLIC_APP_URL` | Ej. `https://ruleta.tudominio.com` |
-| `PORT` | (opcional) puerto del backend, default `3001` |
-| `NODE_ENV` | `production` (se fuerza en el script de inicio) |
-| `SESSION_SECRET` | Secreto para sesiones (opcional) |
+---
 
-## 3. Crear base de datos y usuario en MariaDB (panel ServerAvatar)
+## 1. Configurar el backend en Vercel
 
-Desde el panel de ServerAvatar:
-
-1. Ir a la sección **Bases de datos** → MariaDB
-2. Crear una nueva base de datos, por ejemplo `ruleta_prod`
-3. Crear un nuevo usuario, por ejemplo `ruleta_app`
-4. Asignar privilegios mínimos al usuario sobre la base de datos:
-   - `SELECT`, `INSERT`, `UPDATE`, `DELETE`
-5. Anotar las credenciales para el archivo `.env`
-
-## 4. Variables de entorno (`.env`)
-
-Copiar `.env.example` → `.env` y completar valores reales:
+### 1.1 Preparar el repositorio
 
 ```bash
-cp .env.example .env
+git checkout produccion
+git push origin produccion
 ```
 
-Editar `.env` con las credenciales reales de MariaDB y los demás valores.
+### 1.2 Conectar en Vercel
 
-**Nota:** El usuario prefiere que los secretos estén en `.env` (no en variables de entorno del panel). El archivo `.env` debe subirse al servidor por medio del panel de archivos de ServerAvatar.
+1. Ir a [vercel.com](https://vercel.com) → **Add New → Project**
+2. Importar el repositorio (GitHub/GitLab)
+3. Configuración:
+   - **Framework Preset**: Other
+   - **Root Directory**: `./` (raíz)
+   - **Build Command**: `npm run build:backend && npm run build:frontend`
+   - **Output Directory**: `dist`
+   - **Function Region**: El más cercano a tu BD (ej. `iad1` para US Este)
 
-## 5. Instalación y compilación
+4. **Environment Variables** (Settings → Environment Variables):
 
-El código ya está preparado para MariaDB. Instalar dependencias y compilar:
+| Variable | Valor | Nota |
+|----------|-------|------|
+| `MARIADB_HOST` | `IP_PUBLICA_DEL_VPS` | IP donde corre MariaDB |
+| `MARIADB_PORT` | `3306` | |
+| `MARIADB_DATABASE` | `ruleta` | Nombre BD |
+| `MARIADB_USER` | `ruleta_app` | Usuario con permisos remotos |
+| `MARIADB_PASSWORD` | (contraseña real) | |
+| `OPERATOR_PASSWORD` | Contraseña del panel admin | **Obligatorio** |
+| `SESSION_SECRET` | `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"` | |
+| `TICKET_ENCRYPTION_KEY` | `node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"` | |
+| `FRONTEND_ORIGIN` | `https://ruleta.tudominio.com` | Dominio exacto del frontend |
+| `PUBLIC_APP_URL` | `https://ruleta.tudominio.com` | Para generar QR |
+| `NODE_ENV` | `production` | |
+
+5. **Deploy** → Vercel te da una URL como `https://ruleta-total.vercel.app`
+
+### 1.3 Verificar backend
 
 ```bash
-cd /opt/ruleta-TOTAL
-npm ci
-npm run build:all
+curl https://ruleta-total.vercel.app/api/health
+# → {"status":"OK","timestamp":"..."}
 ```
 
-Scripts disponibles:
-- `npm run build:backend` — compila solo el backend (TypeScript → JavaScript)
-- `npm run build` — compila el frontend
-- `npm run build:all` — compila todo
-- `npm start` — inicia el backend (`node backend/dist/server.js`)
+---
 
-## 6. Configuración del sitio en ServerAvatar
+## 2. Configurar la base de datos (MariaDB en el VPS)
 
-### 6.1 Crear sitio web
+La base de datos MariaDB está en el VPS. Para que Vercel pueda conectarse, hay que:
 
-Desde el panel de ServerAvatar:
-1. Ir a **Sitios web** → Crear sitio
-2. Dominio: `ruleta.tudominio.com`
-3. Tipo de aplicación: **Node.js** (o aplicación personalizada)
-4. Directorio raíz: `/opt/ruleta-TOTAL` (o donde esté el repositorio)
+### 2.1 Permitir conexiones remotas en MariaDB
 
-### 6.2 Proxy inverso para la API
-
-Configurar proxy inverso para que las peticiones a `/api/*` lleguen al backend Node.js:
-
-- **Origen:** `http://127.0.0.1:3001/` (o el puerto definido en `.env`)
-- **Ruta proxy:** `/api/`
-
-### 6.3 SPA (Frontend) catch-all
-
-Configurar regla de reescritura para que el SPA del frontend maneje rutas no encontradas:
-
-```
-RewriteCond %{REQUEST_FILENAME} !-f
-RewriteCond %{REQUEST_FILENAME} !-d
-RewriteCond %{REQUEST_URI} !^/api
-RewriteRule ^(.*)$ /index.html [L]
-```
-
-### 6.4 SSL / HTTPS
-
-1. En ServerAvatar, ir a **SSL** para el dominio
-2. Solicitar certificado Let's Encrypt
-3. Forzar HTTPS (redirigir HTTP → HTTPS)
-
-## 7. Inicio del backend
-
-El backend debe correr como un proceso persistente. Desde el panel de ServerAvatar:
-
-### Opción A: Usar el gestor de procesos de ServerAvatar (recomendado)
-
-Si ServerAvatar soporta iniciar aplicaciones Node.js, usar:
-- **Comando de inicio:** `npm start` (o `node backend/dist/server.js`)
-- **Directorio de trabajo:** `/opt/ruleta-TOTAL`
-- **Variables de entorno:** cargar desde `.env`
-
-### Opción B: Script de inicio personalizado
-
-Crear un script `scripts/prod-start.sh`:
-
-```bash
-#!/bin/bash
-cd /opt/ruleta-TOTAL
-export NODE_ENV=production
-node backend/dist/server.js
-```
-
-Y configurarlo para que se ejecute al iniciar el servidor (si el panel lo permite).
-
-### Opción C: PM2 (si está instalado en el VPS)
-
-```bash
-pm2 start backend/dist/server.js --name ruleta-backend
-pm2 save
-```
-
-## 8. Health check
-
-```bash
-curl -f -s http://localhost:3001/api/health
-```
-
-Desde fuera del servidor (detrás del proxy de ServerAvatar):
-
-```bash
-curl -f -s -o /dev/null https://ruleta.tudominio.com/api/health || exit 1
-```
-
-## 9. Logs y diagnóstico
-
-- **Backend:** stdout/stderr del proceso Node (consola del panel de ServerAvatar o archivos de log)
-- **Servidor web:** logs de nginx/Apache según lo configurado en ServerAvatar
-
-## 10. Actualización
-
-1. Pull del repositorio:
-   ```bash
-   cd /opt/ruleta-TOTAL
-   git pull
-   npm ci
-   npm run build:all
+1. Editar la configuración de MariaDB (normalmente `/etc/mysql/mariadb.conf.d/50-server.cnf`):
+   ```ini
+   # Cambiar bind-address de 127.0.0.1 a 0.0.0.0
+   bind-address = 0.0.0.0
    ```
-2. Reiniciar el backend desde el panel de ServerAvatar
 
-## 11. Rollback
+2. Reiniciar MariaDB:
+   ```bash
+   sudo systemctl restart mariadb
+   ```
 
-Si un deploy introduce regresiones:
+### 2.2 Crear usuario con acceso remoto
 
-- Usar `git checkout <commit>` para volver a una versión anterior
-- Recompilar (`npm run build:all`)
-- Reiniciar el backend
+```sql
+CREATE USER 'ruleta_app'@'%' IDENTIFIED BY 'tu_password_seguro';
+GRANT SELECT, INSERT, UPDATE, DELETE ON ruleta.* TO 'ruleta_app'@'%';
+FLUSH PRIVILEGES;
+```
 
-## 12. Backup y restauración
+> ⚠️ **Seguridad**: `'%'` permite desde cualquier IP. Para más seguridad, limítalo a IPs de Vercel:
+> ```sql
+> -- IPs de Vercel (pueden cambiar, consultar documentación actualizada)
+> CREATE USER 'ruleta_app'@'3.22.29.227' IDENTIFIED BY '...';
+> CREATE USER 'ruleta_app'@'18.220.181.38' IDENTIFIED BY '...';
+> ```
+> O mejor: usar un **túnel SSH** o **Cloudflare Tunnel** para no exponer MariaDB directamente.
 
-- **Base de datos MariaDB:** Usar las herramientas de backup de ServerAvatar para MariaDB (o `mysqldump` desde el panel si está disponible)
-- **Imágenes de premios:** Almacenadas en la BD como data URI base64; se respaldan automáticamente con la BD.
+### 2.3 Abrir puerto 3306 en el firewall
 
-## 13. Tareas de acceso administrativo (solo admin del VPS)
+Desde ServerAvatar o por SSH:
+```bash
+sudo ufw allow from any to any port 3306 proto tcp
+# O más restrictivo:
+sudo ufw allow from 3.22.29.227 to any port 3306 proto tcp
+sudo ufw allow from 18.220.181.38 to any port 3306 proto tcp
+```
 
-- Crear base de datos y usuario MariaDB (panel ServerAvatar)
-- Configurar dominio, DNS y SSL (panel ServerAvatar)
-- Crear el sitio web y configurar proxy inverso (panel ServerAvatar)
-- Subir el archivo `.env` con los secretos (gestor de archivos de ServerAvatar)
-- Configurar el proceso persistente del backend (panel ServerAvatar)
+### 2.4 Configurar variables en Vercel
 
-## 14. Lista de verificación al final
+| Variable | Valor |
+|----------|-------|
+| `MARIADB_HOST` | IP pública del VPS |
+| `MARIADB_PORT` | `3306` |
+| `MARIADB_DATABASE` | `ruleta` |
+| `MARIADB_USER` | `ruleta_app` |
+| `MARIADB_PASSWORD` | (la que definiste) |
+
+---
+
+## 3. Configurar el frontend en el VPS (OpenLiteSpeed + ServerAvatar)
+
+### 3.1 Build local
+
+En tu máquina local (con Node.js):
+
+```bash
+# 1. Crear .env.production con la URL del backend en Vercel
+cat > .env.production << EOF
+VITE_API_URL=https://ruleta-total.vercel.app/api
+VITE_BASE_PATH=/
+EOF
+
+# 2. Compilar
+npm run build
+
+# 3. La carpeta dist/ se genera con los archivos estáticos
+```
+
+### 3.2 Subir a ServerAvatar
+
+**Opción A: Panel de archivos de ServerAvatar**
+1. Ir a **Sitios web** → tu dominio → **File Manager**
+2. Subir todo el contenido de `dist/` al directorio raíz del sitio (ej. `/home/serveravatar/dominios/ruleta.tudominio.com/public_html`)
+
+**Opción B: Script automatizado**
+```bash
+./scripts/deploy-static.sh admin@vps:/home/serveravatar/dominios/ruleta.tudominio.com/public_html
+```
+
+### 3.3 Configurar sitio en ServerAvatar
+
+1. **Crear sitio web**:
+   - Dominio: `ruleta.tudominio.com`
+   - Tipo: **PHP/Static** (NO Node.js)
+   - Raíz: `/home/serveravatar/dominios/ruleta.tudominio.com/public_html`
+
+2. **SSL**: Solicitar certificado Let's Encrypt desde ServerAvatar
+
+3. **Rewrite rules** (si ServerAvatar lo permite via .htaccess o panel):
+
+   ```
+   RewriteEngine On
+   # Archivos existentes se sirven directo
+   RewriteCond %{REQUEST_FILENAME} -f [OR]
+   RewriteCond %{REQUEST_FILENAME} -d
+   RewriteRule ^ - [L]
+   # Cualquier otra ruta → index.html (SPA fallback)
+   RewriteRule ^(.*)$ /index.html [L]
+   ```
+
+   > La app usa query params (`?view=play|admin|menu`), así que el catch-all es simple.
+
+---
+
+## 4. Variables de entorno: ¿dónde va cada una?
+
+| Variable | Dónde se define | Visible en navegador |
+|----------|----------------|---------------------|
+| `VITE_API_URL` | `.env.production` local (build) | **SÍ** (en bundle JS) |
+| `VITE_BASE_PATH` | `.env.production` local (build) | **SÍ** |
+| `MARIADB_*` | Vercel Dashboard (env vars) | **NO** 🔒 |
+| `OPERATOR_PASSWORD` | Vercel Dashboard | **NO** 🔒 |
+| `SESSION_SECRET` | Vercel Dashboard | **NO** 🔒 |
+| `TICKET_ENCRYPTION_KEY` | Vercel Dashboard | **NO** 🔒 |
+| `FRONTEND_ORIGIN` | Vercel Dashboard | **NO** 🔒 |
+| `PUBLIC_APP_URL` | Vercel Dashboard | **NO** 🔒 |
+
+> **El VPS no tiene ningún secret**. Solo archivos estáticos (`dist/`).  
+> **`.env.production` local** solo contiene `VITE_API_URL` (público, necesario para el build).
+
+---
+
+## 5. Actualización (deploy nuevo)
+
+### Frontend (cada vez que cambies el frontend)
+
+```bash
+# Local
+git pull origin produccion
+npm ci
+cp .env.production .env.production  # o asegurarte que existe
+npm run build
+
+# Subir a VPS
+./scripts/deploy-static.sh admin@vps:/home/serveravatar/dominios/ruleta.tudominio.com/public_html
+```
+
+### Backend (cada vez que cambies el backend)
+
+```bash
+git push origin produccion
+# Vercel detecta el push y redeploy automáticamente
+# O ir a Vercel Dashboard → Deployments → Trigger Deploy
+```
+
+---
+
+## 6. Rollback
+
+### Frontend
+```bash
+# El script deploy-static.sh deja el directorio .old por 1 minuto
+# Para restaurar manualmente:
+ssh admin@vps "mv /ruta/public_html /ruta/public_html.broken && mv /ruta/public_html.old /ruta/public_html"
+```
+
+### Backend
+En Vercel Dashboard → Deployments → último deploy funcional → "Promote to Production"
+
+### Base de datos
+Usar backups automáticos de Turso/PlanetScale o MariaDB
+
+---
+
+## 7. Health check
+
+```bash
+# Backend en Vercel
+curl -f https://ruleta-total.vercel.app/api/health
+
+# Frontend en VPS
+curl -f -o /dev/null https://ruleta.tudominio.com
+```
+
+---
+
+## 8. Funcionalidades que requieren backend
+
+| Funcionalidad | Endpoint | ¿Funciona sin backend? |
+|--------------|----------|----------------------|
+| Mostrar ruleta con premios | `GET /api/configuracion` | ❌ |
+| Girar la ruleta (con ticket) | `POST /api/spin` | ❌ |
+| Login de operador | `GET/POST /api/auth/*` | ❌ |
+| CRUD plantillas ruleta | `GET/POST/PUT/DELETE /api/roulettes/*` | ❌ |
+| Generar/validar tickets QR | `GET/POST /api/tickets/*` | ❌ |
+| Imágenes de premios | `GET /api/prizes/:id/image` | ❌ |
+| Calibración de ruleta | `GET/PUT /api/wheel/calibration` | ❌ |
+| **Servir HTML/CSS/JS/IMG** | Archivos estáticos | **✅ SÍ** |
+
+> Sin el backend en Vercel, la app **no funciona**. El frontend es la interfaz, pero toda la lógica y datos están en la API.
+
+---
+
+## 9. Lista de verificación
 
 | Tarea | Estado |
 |-------|--------|
-| MariaDB creada con usuario y privilegios mínimos | |
-| `.env` subido con credenciales reales | |
-| Dependencias instaladas (`npm ci`) | |
-| Backend compilado (`npm run build:all`) | |
-| Sitio web creado en ServerAvatar | |
-| Proxy inverso configurado para `/api/` | |
-| SSL/HTTPS activo | |
-| Backend corriendo como proceso persistente | |
-| Health check exitoso (`/api/health`) | |
-| Login de operador funciona (cookie) | |
-| SPA del frontend carga correctamente | |
+| Repositorio en GitHub (`ramaproduccion`) | |
+| Proyecto creado en Vercel conectado al repo | |
+| Variables de entorno configuradas en Vercel | |
+| Base de datos accesible desde Vercel (Turso/PlanetScale/MariaDB remoto) | |
+| Build local genera `dist/` correctamente | |
+| Build en Vercel exitoso | |
+| `curl /api/health` desde Vercel responde OK | |
+| `dist/` subido al VPS via ServerAvatar o script | |
+| SSL activo (Let's Encrypt) | |
+| Sitio carga https://ruleta.tudominio.com | |
+| Giro de ruleta funciona (llama a Vercel API) | |
+| Login de operador funciona (cookie cross-domain) | |
+| CORS configurado (`FRONTEND_ORIGIN` en Vercel) | |
+| Script `deploy-static.sh` funcional | |
 
-## 15. Criterio de finalización
+---
 
-- [ ] Scripts de producción verificados
-- [ ] `.env.example` actualizado con variables MariaDB
-- [ ] `package.json` corregido (`start` → `node backend/dist/server.js`)
-- [ ] Seguridad verificada (CORS, rate-limit, cookies seguras)
-- [ ] Tests (`npm test`) pasando
-- [ ] `DEPLOYMENT.md` entregado al admin
-- [ ] Plan de rollback documentado
+## 10. Comandos rápidos
+
+```bash
+# Generar secrets
+node -e "console.log('SESSION_SECRET=' + require('crypto').randomBytes(32).toString('hex'))"
+node -e "console.log('TICKET_ENCRYPTION_KEY=' + require('crypto').randomBytes(32).toString('base64'))"
+
+# Build frontend
+npm run build
+
+# Deploy frontend a VPS
+./scripts/deploy-static.sh usuario@vps:/ruta/public_html
+
+# Deploy backend a Vercel
+git push origin produccion
+```

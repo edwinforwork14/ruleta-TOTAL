@@ -48,11 +48,8 @@ git push origin produccion
 
 | Variable | Valor | Nota |
 |----------|-------|------|
-| `MARIADB_HOST` | `IP_PUBLICA_DEL_VPS` | IP donde corre MariaDB |
-| `MARIADB_PORT` | `3306` | |
-| `MARIADB_DATABASE` | `ruleta` | Nombre BD |
-| `MARIADB_USER` | `ruleta_app` | Usuario con permisos remotos |
-| `MARIADB_PASSWORD` | (contraseña real) | |
+| `DATABASE_URL` | `libsql://ruleta-prod-usuario.turso.io` | De `turso db show --url` |
+| `DATABASE_AUTH_TOKEN` | `eyJ...` | De `turso db tokens create` |
 | `OPERATOR_PASSWORD` | Contraseña del panel admin | **Obligatorio** |
 | `SESSION_SECRET` | `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"` | |
 | `TICKET_ENCRYPTION_KEY` | `node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"` | |
@@ -71,58 +68,55 @@ curl https://ruleta-total.vercel.app/api/health
 
 ---
 
-## 2. Configurar la base de datos (MariaDB en el VPS)
+## 2. Configurar la base de datos (Turso)
 
-La base de datos MariaDB está en el VPS. Para que Vercel pueda conectarse, hay que:
+Turso es libSQL (compatible con SQLite) serverless, con plan gratuito generoso:
+- 100 bases de datos, 5 GB almacenamiento, 500M lecturas/mes, 10M escrituras/mes
+- **No caduca**, es permanente.
 
-### 2.1 Permitir conexiones remotas en MariaDB
+### 2.1 Crear BD en Turso
 
-1. Editar la configuración de MariaDB (normalmente `/etc/mysql/mariadb.conf.d/50-server.cnf`):
-   ```ini
-   # Cambiar bind-address de 127.0.0.1 a 0.0.0.0
-   bind-address = 0.0.0.0
-   ```
-
-2. Reiniciar MariaDB:
-   ```bash
-   sudo systemctl restart mariadb
-   ```
-
-### 2.2 Crear usuario con acceso remoto
-
-```sql
-CREATE USER 'ruleta_app'@'%' IDENTIFIED BY 'tu_password_seguro';
-GRANT SELECT, INSERT, UPDATE, DELETE ON ruleta.* TO 'ruleta_app'@'%';
-FLUSH PRIVILEGES;
-```
-
-> ⚠️ **Seguridad**: `'%'` permite desde cualquier IP. Para más seguridad, limítalo a IPs de Vercel:
-> ```sql
-> -- IPs de Vercel (pueden cambiar, consultar documentación actualizada)
-> CREATE USER 'ruleta_app'@'3.22.29.227' IDENTIFIED BY '...';
-> CREATE USER 'ruleta_app'@'18.220.181.38' IDENTIFIED BY '...';
-> ```
-> O mejor: usar un **túnel SSH** o **Cloudflare Tunnel** para no exponer MariaDB directamente.
-
-### 2.3 Abrir puerto 3306 en el firewall
-
-Desde ServerAvatar o por SSH:
 ```bash
-sudo ufw allow from any to any port 3306 proto tcp
-# O más restrictivo:
-sudo ufw allow from 3.22.29.227 to any port 3306 proto tcp
-sudo ufw allow from 18.220.181.38 to any port 3306 proto tcp
+# Instalar CLI de Turso (una vez)
+npm install -g turso
+turso auth login
+
+# Crear base de datos
+turso db create ruleta-prod
+
+# Obtener URL de conexión
+turso db show ruleta-prod --url
+# → libsql://ruleta-prod-usuario.turso.io
+
+# Generar token de autenticación
+turso db tokens create ruleta-prod
+# → eyJ...
 ```
 
-### 2.4 Configurar variables en Vercel
+### 2.2 Configurar variables en Vercel
 
 | Variable | Valor |
 |----------|-------|
-| `MARIADB_HOST` | IP pública del VPS |
-| `MARIADB_PORT` | `3306` |
-| `MARIADB_DATABASE` | `ruleta` |
-| `MARIADB_USER` | `ruleta_app` |
-| `MARIADB_PASSWORD` | (la que definiste) |
+| `DATABASE_URL` | `libsql://ruleta-prod-usuario.turso.io` |
+| `DATABASE_AUTH_TOKEN` | `eyJ...` (token generado) |
+| `OPERATOR_PASSWORD` | Contraseña del panel admin |
+| `SESSION_SECRET` | `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"` |
+| `TICKET_ENCRYPTION_KEY` | `node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"` |
+| `FRONTEND_ORIGIN` | `https://ruleta.tudominio.com` |
+| `PUBLIC_APP_URL` | `https://ruleta.tudominio.com` |
+| `NODE_ENV` | `production` |
+
+### 2.3 Migrar datos desde MariaDB (si ya tienes datos)
+
+Si ya tienes datos en MariaDB y quieres pasarlos a Turso:
+
+```bash
+# 1. Exportar desde MariaDB (en VPS)
+mysqldump -u root -p ruleta > ruleta-export.sql
+
+# 2. Convertir el SQL de MySQL a SQLite (usar herramienta como sqliter)
+# O más simple: crear las plantillas manualmente desde el panel admin
+```
 
 ---
 

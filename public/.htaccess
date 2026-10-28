@@ -1,0 +1,13 @@
+# MIME types correctos para módulos ES
+AddType application/javascript .js .mjs
+AddType text/css .css
+AddType application/wasm .wasm
+AddType application/json .json
+AddType image/svg+xml .svg
+
+# SPA fallback
+RewriteEngine On
+RewriteCond %{REQUEST_FILENAME} -f [OR]
+RewriteCond %{REQUEST_FILENAME} -d
+RewriteRule ^ - [L]
+RewriteRule ^(.*)$ /index.html [L]

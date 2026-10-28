@@ -9,7 +9,7 @@ function App() {
 	const view = query.get("view");
 	const path = window.location.pathname.replace(/\/+$/, "") || "/";
 
-	if (path === "/login-admin") return <LoginAdmin />;
+	if (path === "/login-admin" || view === "login-admin") return <LoginAdmin />;
 
 	if (view === "menu") {
 		return (

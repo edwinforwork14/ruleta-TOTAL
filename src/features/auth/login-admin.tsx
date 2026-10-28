@@ -18,7 +18,7 @@ export function LoginAdmin() {
 		const checkAuth = async () => {
 			try {
 				const res = await fetch(`${API_URL}/auth/me`, {
-					credentials: "same-origin",
+					credentials: "include",
 					cache: "no-store",
 				});
 				const data = (await res.json().catch(() => ({}))) as { authenticated?: boolean };
@@ -40,9 +40,9 @@ export function LoginAdmin() {
 		try {
 			const res = await fetch(`${API_URL}/auth/login`, {
 				method: "POST",
-				headers: { "Content-Type": "application/json" },
-				credentials: "same-origin",
-				body: JSON.stringify({ password }),
+				headers: { "Content-Type": "application/x-www-form-urlencoded" },
+				credentials: "include",
+				body: new URLSearchParams({ password }).toString(),
 			});
 
 			const data = await res.json().catch(() => ({}));

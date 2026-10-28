@@ -18,12 +18,14 @@ export default defineConfig({
 		port: 5177,
 		proxy: {
 			"/api": {
-				target: "http://localhost:3001",
+				target: "https://backend-ruleta-total.vercel.app",
 				changeOrigin: true,
+				secure: false,
 			},
 			"/api-ruleta": {
-				target: "http://localhost:3001",
+				target: "https://backend-ruleta-total.vercel.app",
 				changeOrigin: true,
+				secure: false,
 			},
 		},
 	},
